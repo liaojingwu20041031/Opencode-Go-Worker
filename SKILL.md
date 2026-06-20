@@ -1,67 +1,126 @@
 ---
 name: opencode-go-worker
-description: "Use when the user wants Codex to plan/review and OpenCode Go to execute code edits via one-shot opencode run. Trigger words: OpenCode Go, opencode worker, OpenCode干活, Codex决策OpenCode执行, 开启OpenCode执行, 低成本模型改代码. Do not use for analysis-only or no-code-change requests."
+description: "Codex-controlled OpenCode worker. Use when Codex should plan/review and OpenCode should execute bounded code edits through short-lived opencode run. Dynamically resolve models from opencode models; prefer OpenCode Go, allow free fallback, never silently use paid providers. Do not use for analysis-only, writing-only, no-code-change, no-command, or no-OpenCode requests."
 ---
 
 # OpenCode Go Worker
 
-Use this skill for one-shot delegation:
+Codex controls.
+OpenCode executes.
+Wrapper resolves model dynamically.
+Each run is short-lived.
 
-Codex plans and reviews. OpenCode Go executes.
+## Modes
 
-## Trigger
+Use `USER_TASK` by default for bounded edits in a user project:
+- code changes
+- bug fixes
+- config fixes
+- test fixes
+- project documentation updates
 
-Use when the user asks:
-- OpenCode Go 干活
-- 开启 OpenCode 执行
-- Codex 决策，OpenCode 执行
-- 用低成本模型改代码
-- 调 opencode run 修改代码
+Do not use `USER_TASK` for:
+- modifying this skill/plugin
+- syncing global skills
+- auto `git add`, `git commit`, or `git push`
+- pure web research
+- long-form analysis writing
+- analysis-only or no-code-change requests
 
-Do not use when the user asks:
-- 只分析
-- 不要改代码
-- 不要执行命令
-- 不要调用 OpenCode
-- 只给方案
+Use `MAINTAIN_SKILL` only when the user explicitly asks to fix or maintain `opencode-go-worker` itself.
+Even in `MAINTAIN_SKILL`, do not commit or push unless explicitly requested.
 
-## Workflow
+## Rounds
 
-1. Codex creates `.ai/OC_TASK.md`.
-2. Codex calls `run_oc_worker`.
-3. `run_oc_worker` runs one `opencode run`.
-4. OpenCode finishes and exits.
-5. Codex checks `git status --short` and `git diff --stat`.
-6. Codex reports result.
+- Default `MaxRounds = 1`.
+- Hard limit `MaxRounds = 3`.
+- Each round is exactly one `opencode run`.
+- The wrapper executes one round only.
+- Codex must review `git status --short` and `git diff --stat` after each round before deciding another round.
+- Regenerate or update `.ai/OC_TASK.md` before each new round.
 
 ## Rules
 
-- No Codex subagent.
-- No OpenCode TUI.
-- No opencode serve.
-- No background daemon.
+- No daemon.
+- No TUI.
+- No serve.
 - No recursive delegation.
+- No auto commit/push.
 - No `--dangerously-skip-permissions`.
-- One task, one `opencode run`.
-- Keep task small.
-- Always review diff after execution.
+- No hidden paid fallback.
+- Keep tasks small and file-scoped.
 
-## Default models
+## Model Policy
 
-- small/docs/config: `opencode-go/deepseek-v4-flash`
-- normal coding: `opencode-go/kimi-k2.7-code`
-- harder fix: `opencode-go/deepseek-v4-pro`
+Let the wrapper resolve models from `opencode models`.
 
-If `opencode models` does not show the requested `opencode-go/*` model, stop and ask the user to choose an available model or update OpenCode/provider configuration.
+Priority:
+1. Explicit `Model`: use only if present; otherwise stop.
+2. Prefer `opencode-go/*`.
+3. If no Go model is visible and `AllowFreeFallback` is true, allow visible free/zero-extra-cost providers: `opencode/*`, `copilot/*`, `github-copilot/*`, `gemini/*`, `google/*`.
+4. Use paid providers only when `AllowPaidFallback` is explicit.
 
-## Task file format
+Match `ModelIntent`:
+- `small`, `docs`: prefer `flash`, `mini`, `lite`, `fast`, `small`.
+- `coding`: prefer `code`, `coder`, `k2`, `deepseek`, `qwen`, `glm`.
+- `hard`: prefer coding models that are not `flash`, `mini`, or `lite`.
+- `review`: prefer fast models.
 
-`.ai/OC_TASK.md` must include:
+## Agent Policy
 
-- Objective
-- Allowed files
-- Forbidden changes
-- Steps
-- Test command
-- Final report requirement
+Use `-Agent auto` unless the task needs a specific OpenCode agent.
 
+Auto mapping:
+- edits, bug fixes, implementation, project docs -> `build`
+- read-only exploration -> `plan` or `explore`
+- risk review or issue finding -> `plan` or `scout`
+
+If an agent is unavailable, fall back to `build` or OpenCode default and report it.
+
+## Task File
+
+Create `.ai/OC_TASK.md`:
+
+```md
+# OC Task
+
+## Mode
+USER_TASK
+
+## Objective
+One sentence.
+
+## Allowed files
+- path/to/file
+
+## Forbidden
+- Do not edit files outside Allowed files.
+- Do not refactor unrelated code.
+- Do not commit or push.
+- Do not modify opencode-go-worker unless Mode is MAINTAIN_SKILL.
+
+## Steps
+1. ...
+2. ...
+
+## Test
+No test command. Explain why.
+
+## Report
+Return:
+- changed files
+- test result
+- blockers
+- summary
+```
+
+## After Each Round
+
+Codex must inspect:
+
+```sh
+git status --short
+git diff --stat
+```
+
+Then decide whether to stop or prepare the next short-lived round.
