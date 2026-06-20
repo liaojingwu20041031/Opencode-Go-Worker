@@ -74,12 +74,30 @@ if (-not (Test-ModelAvailable -Models $availableModels -Name $Model)) {
 $message = "Strictly execute the task file. Only modify allowed files. Do not do unrelated refactors. Run requested tests if possible. Report changed files, tests, and blockers."
 
 $psi = [System.Diagnostics.ProcessStartInfo]::new()
-$psi.FileName = $opencodeCommand.Source
 $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.RedirectStandardError = $true
 $psi.CreateNoWindow = $true
 $psi.WorkingDirectory = $projectPath
+
+if ([System.IO.Path]::GetExtension($opencodeCommand.Source) -ieq ".ps1") {
+  $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+  if (-not $pwshCommand) {
+    $pwshCommand = Get-Command powershell -ErrorAction SilentlyContinue
+  }
+  if (-not $pwshCommand) {
+    Stop-WithMessage "opencode resolved to a PowerShell shim, but neither pwsh nor powershell was found."
+  }
+  $psi.FileName = $pwshCommand.Source
+  [void]$psi.ArgumentList.Add("-NoProfile")
+  [void]$psi.ArgumentList.Add("-ExecutionPolicy")
+  [void]$psi.ArgumentList.Add("Bypass")
+  [void]$psi.ArgumentList.Add("-File")
+  [void]$psi.ArgumentList.Add($opencodeCommand.Source)
+} else {
+  $psi.FileName = $opencodeCommand.Source
+}
+
 [void]$psi.ArgumentList.Add("run")
 [void]$psi.ArgumentList.Add("--agent")
 [void]$psi.ArgumentList.Add($Agent)
@@ -114,7 +132,7 @@ if ($stdout) {
   Write-Output $stdout
 }
 if ($stderr) {
-  Write-Error $stderr
+  [Console]::Error.WriteLine($stderr)
 }
 
 $exitCode = if ($finished) { $process.ExitCode } else { 124 }
@@ -126,3 +144,5 @@ Write-Output "git diff --stat:"
 & git -C $projectPath diff --stat
 
 exit $exitCode
+
+
